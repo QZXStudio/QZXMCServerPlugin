@@ -1,0 +1,18 @@
+name: QZXBotSync
+version: 1.0
+main: com.qzxtpfwq.QZXBotSync
+api-version: 1.21
+author: ytsj
+description: MC服务器与QQ群消息同步插件，通过 NapCatQQ (OneBot 11) 推送消息
+
+commands:
+  qzxbot:
+    description: QZXBotSync 主命令
+    usage: /qzxbot <ws|group|reload|status|reconnect|help>
+  qzx:
+    description: 称号管理
+    usage: /qzx <title|dtitle> <玩家名> [称号]
+
+permissions:
+  qzxbot.admin:
+    default: op
