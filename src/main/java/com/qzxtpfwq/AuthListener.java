@@ -5,7 +5,6 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Sound;
@@ -70,8 +69,6 @@ public class AuthListener implements Listener {
     private final Map<UUID, Location> frozenLocations = new ConcurrentHashMap<>();
     private final Set<UUID> teleportGuard = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    // 游戏模式保存/恢复
-    private final Map<UUID, GameMode> savedGameModes = new ConcurrentHashMap<>();
 
     // 注册时第一次输入的密码暂存
     private final Map<UUID, String> pendingPasswords = new ConcurrentHashMap<>();
@@ -613,9 +610,6 @@ public class AuthListener implements Listener {
         UUID uuid = player.getUniqueId();
         frozenLocations.put(uuid, player.getLocation().clone());
 
-        // 保存并设置游戏模式（不碰飞行属性，让gamemode自行管理能力）
-        savedGameModes.put(uuid, player.getGameMode());
-        player.setGameMode(GameMode.ADVENTURE);
         player.setWalkSpeed(0f);
 
         // 无敌 + 满血满饱
@@ -642,10 +636,7 @@ public class AuthListener implements Listener {
         frozenLocations.remove(uuid);
         teleportGuard.remove(uuid);
 
-        // 恢复游戏模式——setGameMode 自行设置 allowFlight/flySpeed 等能力
-        GameMode gm = savedGameModes.remove(uuid);
-        if (gm != null) player.setGameMode(gm);
-        player.setWalkSpeed(0.2f);  // 恢复默认行走速度
+        player.setWalkSpeed(0.2f);
 
         // 确保移除所有残留效果
         player.removePotionEffect(PotionEffectType.BLINDNESS);
@@ -667,9 +658,6 @@ public class AuthListener implements Listener {
         // ⚠ 先恢复状态再清理，防止退出时数据丢失
         frozenLocations.remove(uuid);
         teleportGuard.remove(uuid);
-
-        GameMode gm = savedGameModes.remove(uuid);
-        if (gm != null) player.setGameMode(gm);
         player.setWalkSpeed(0.2f);
 
         pendingPasswords.remove(uuid);
