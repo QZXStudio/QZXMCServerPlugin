@@ -757,7 +757,11 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
             return true;
         }
 
-        if (!sender.hasPermission("qzxbot.admin") && !sender.isOp()) {
+        // bindqq、status、help 不需要 OP 权限
+        boolean needsAdmin = !args[0].equalsIgnoreCase("bindqq")
+                && !args[0].equalsIgnoreCase("status")
+                && !args[0].equalsIgnoreCase("help");
+        if (needsAdmin && !sender.hasPermission("qzxbot.admin") && !sender.isOp()) {
             sender.sendMessage(ChatColor.RED + "你没有权限使用此命令！");
             return true;
         }
