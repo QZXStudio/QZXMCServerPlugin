@@ -1,0 +1,46 @@
+# =================================================================== #
+#                     QZXBotSync 插件配置文件                           #
+#                          作者: ytsj                                 #
+# =================================================================== #
+# 本插件通过 NapCatQQ (OneBot 11) WebSocket 将 MC 服务器事件同步到 QQ 群
+# 修改配置后请使用 /qzxbot reload 重载
+
+# ==================== NapCat WebSocket 连接设置 ====================
+napcat:
+  ws-url: "ws://192.168.1.186:20000/?access_token=000000"
+  reconnect-interval: 10
+
+# ==================== QQ 群设置 ====================
+qq-groups:
+  - 123456789
+
+# ==================== 服务器信息 ====================
+# 插件会按优先级自动读取服务器名称:
+#   1. 此处配置的非空值（非"默认服务器"）
+#   2. server.properties 中的 motd=xxx
+#   3. server.properties 中的 server-name=xxx
+#   4. 都不存在则显示"默认服务器"
+server-name: ""
+
+# ==================== 消息同步开关 ====================
+sync:
+  join: true
+  quit: true
+  chat: true
+  death: true
+  weather: true
+  advancement: true
+  reverse: true
+  recall: true
+
+# ==================== 转发统计 ====================
+stats:
+  show-all-groups: false
+
+# ==================== 认证系统 ====================
+auth:
+  enabled: true
+  min-password-length: 4
+  max-password-length: 32
+  max-login-attempts: 3
+  session-timeout-minutes: 5
