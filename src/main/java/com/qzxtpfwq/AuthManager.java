@@ -21,6 +21,8 @@ public class AuthManager {
         NEEDS_LOGIN,
         AWAITING_REGISTER_PASSWORD,
         AWAITING_LOGIN_PASSWORD,
+        AWAITING_PREMIUM_VERIFY,
+        AWAITING_CONFLICT_RESOLVE,
         LOGGED_IN
     }
 
@@ -193,6 +195,98 @@ public class AuthManager {
         String username = db.getUsername(uuid);
         logger.info("玩家 " + username + " 登录成功");
         return AuthResult.SUCCESS;
+    }
+
+    /** 正版登录：检查冲突并处理 */
+    public String tryPremiumLogin(UUID offlineUuid, String username, String premiumUuid) {
+        logger.info("[正版认证]   ├ 查询正版映射: premiumUuid=" + premiumUuid);
+        // 1. 已有正版映射 → 直接登录
+        String existingOffline = db.getOfflineUUIDByPremium(premiumUuid);
+        if (existingOffline != null) {
+            logger.info("[正版认证]   ├ 找到已有映射 → offlineUuid=" + existingOffline + "，直接登录");
+            UUID eu = UUID.fromString(existingOffline);
+            loggedInPlayers.add(eu);
+            playerStates.put(eu, AuthState.LOGGED_IN);
+            return "OK";
+        }
+        logger.info("[正版认证]   ├ 无已有映射");
+
+        // 2. 离线 UUID 已注册 → 冲突
+        boolean exists = db.playerExists(offlineUuid);
+        logger.info("[正版认证]   ├ 检查离线UUID是否已注册: " + offlineUuid + " → " + exists);
+        if (exists) {
+            logger.info("[正版认证]   ├ 离线账号已存在 → 返回 CONFLICT");
+            return "CONFLICT";
+        }
+
+        // 3. 无冲突 → 创建正版条目
+        logger.info("[正版认证]   ├ 无冲突 → 创建正版账号条目 ...");
+        db.registerPlayer(offlineUuid, username, "PREMIUM", "PREMIUM", "0.0.0.0");
+        db.linkPremiumAccount(premiumUuid, offlineUuid.toString(), username);
+        logger.info("[正版认证]   ├ DB 写入完成 (offlineUuid=" + offlineUuid + " ↔ premiumUuid=" + premiumUuid + ")");
+        loggedInPlayers.add(offlineUuid);
+        playerStates.put(offlineUuid, AuthState.LOGGED_IN);
+        logger.info("[正版认证]   └ 正版账号注册成功, 返回 OK");
+        return "OK";
+    }
+
+    /** 强制关联正版账号（合并模式 — 覆盖密码为 PREMIUM，用于 transfer 验证返回时） */
+    public void forceLinkPremium(UUID offlineUuid, String username, String premiumUuid) {
+        String existingOffline = db.getOfflineUUIDByPremium(premiumUuid);
+        if (existingOffline != null) {
+            logger.info("[正版认证]   ├ 正版 UUID 已映射到 " + existingOffline + "，直接登录");
+            UUID eu = UUID.fromString(existingOffline);
+            loggedInPlayers.add(eu);
+            playerStates.put(eu, AuthState.LOGGED_IN);
+            return;
+        }
+        db.registerPlayer(offlineUuid, username, "PREMIUM", "PREMIUM", "0.0.0.0");
+        db.linkPremiumAccount(premiumUuid, offlineUuid.toString(), username);
+        logger.info("[正版认证]   ├ 合并关联完成: offlineUuid=" + offlineUuid + " ↔ premiumUuid=" + premiumUuid);
+        loggedInPlayers.add(offlineUuid);
+        playerStates.put(offlineUuid, AuthState.LOGGED_IN);
+    }
+
+    /** 仅建立映射不覆盖密码（新建模式 — 离线密码保留不动） */
+    public void linkPremiumOnly(UUID offlineUuid, String username, String premiumUuid) {
+        String existingOffline = db.getOfflineUUIDByPremium(premiumUuid);
+        if (existingOffline != null) {
+            logger.info("[正版认证]   ├ 正版 UUID 已映射到 " + existingOffline + "，直接登录");
+            UUID eu = UUID.fromString(existingOffline);
+            loggedInPlayers.add(eu);
+            playerStates.put(eu, AuthState.LOGGED_IN);
+            return;
+        }
+        // 如果离线号没有注册记录，则创建 PREMIUM 标记；已有则不动
+        if (!db.playerExists(offlineUuid)) {
+            db.registerPlayer(offlineUuid, username, "PREMIUM", "PREMIUM", "0.0.0.0");
+        }
+        db.linkPremiumAccount(premiumUuid, offlineUuid.toString(), username);
+        logger.info("[正版认证]   ├ 新建关联完成 (离线密码未动): offlineUuid=" + offlineUuid + " ↔ premiumUuid=" + premiumUuid);
+        loggedInPlayers.add(offlineUuid);
+        playerStates.put(offlineUuid, AuthState.LOGGED_IN);
+    }
+
+    /** 合并离线密码到正版账号 */
+    public boolean mergePremiumWithOffline(UUID offlineUuid, String password, String premiumUuid) {
+        String storedHash = db.getPasswordHash(offlineUuid);
+        String storedSalt = db.getSalt(offlineUuid);
+        if (storedHash == null || storedSalt == null) return false;
+        String inputHash = hashPassword(password, storedSalt);
+        if (!storedHash.equals(inputHash)) return false;
+
+        db.linkPremiumAccount(premiumUuid, offlineUuid.toString(), db.getUsername(offlineUuid));
+        loggedInPlayers.add(offlineUuid);
+        playerStates.put(offlineUuid, AuthState.LOGGED_IN);
+        return true;
+    }
+
+    /** 使用新 UUID 创建正版账号（不与离线冲突时） */
+    public void createPremiumAccount(UUID offlineUuid, String username, String premiumUuid) {
+        db.registerPlayer(offlineUuid, username, "PREMIUM", "PREMIUM", "0.0.0.0");
+        db.linkPremiumAccount(premiumUuid, offlineUuid.toString(), username);
+        loggedInPlayers.add(offlineUuid);
+        playerStates.put(offlineUuid, AuthState.LOGGED_IN);
     }
 
     public int getRemainingAttempts(UUID uuid) {
