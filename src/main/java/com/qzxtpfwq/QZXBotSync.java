@@ -61,6 +61,10 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
     private AuthManager authManager;
     private AuthListener authListener;
     private boolean authEnabled = true;
+    private String authMode = "main";
+    private String authServerAddress = "localhost:25566";
+    private String mainServerAddress = "localhost:25565";
+    private String sharedDataDir = "plugins/QZXBotSync/shared";
     private int authMinPasswordLength = 4;
     private int authMaxPasswordLength = 32;
     private int authMaxLoginAttempts = 3;
@@ -87,11 +91,30 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
     public void onEnable() {
         saveDefaultConfig();
         startTime = System.currentTimeMillis();
-        napCatWS = new NapCatWS(getLogger());
         buildEntityNameMap();
         buildDeathTranslations();
         buildAdvancementTitleMap();
-        loadConfig();
+        loadConfig(); // 只读配置，不调 napCatWS
+
+        // ──── 认证子服模式 ────
+        if ("verify".equalsIgnoreCase(authMode)) {
+            getLogger().info("运行模式: 正版认证子服 (online-mode=true 的 Paper 实例)");
+            getLogger().info("认证完成后将 transfer 到主服: " + mainServerAddress);
+
+            File sharedDir = new File(sharedDataDir);
+            if (!sharedDir.exists()) sharedDir.mkdirs();
+
+            new PremiumAuthVerifyListener(this, sharedDataDir, mainServerAddress).register();
+            printBanner();
+            getLogger().info("QZXBotSync 认证子服模式已就绪");
+            return;
+        }
+
+        // ──── 主服模式 ────
+        // napCatWS 必须在 initAuthSystem 之前创建，initAuthSystem 里的 AuthListener 构造会用到
+        napCatWS = new NapCatWS(getLogger());
+        napCatWS.setMonitoredGroups(groupIds);
+        napCatWS.configure(wsUrl, reconnectInterval);
 
         qzxTitle = new QZXTitle(this, napCatWS, serverName, groupIds);
         Bukkit.getPluginManager().registerEvents(qzxTitle, this);
@@ -100,10 +123,10 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
-        // 初始化认证系统（创建dbManager）
+        // 初始化认证系统（创建dbManager + AuthListener）
         initAuthSystem();
 
-        // QQ群回调（在DB创建后设置，能访问绑定数据）
+        // QQ群回调
         napCatWS.setGroupMessageCallback((groupName, senderQQ, senderName, message) -> {
             String display;
             if (dbManager != null && authEnabled) {
@@ -152,7 +175,7 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
         napCatWS.connect();
 
         printBanner();
-        getLogger().info("QZXBotSync 已加载");
+        getLogger().info("QZXBotSync 主服模式已加载 (正版认证服: " + authServerAddress + ")");
     }
 
     @Override
@@ -194,11 +217,18 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
         syncRecall = config.getBoolean("sync.recall", true);
         statsShowAllGroups = config.getBoolean("stats.show-all-groups", false);
 
-        napCatWS.setMonitoredGroups(groupIds);
-        napCatWS.configure(wsUrl, reconnectInterval);
+        // napCatWS 在 onEnable 主服分支才创建，这里不能直接调
+        if (napCatWS != null) {
+            napCatWS.setMonitoredGroups(groupIds);
+            napCatWS.configure(wsUrl, reconnectInterval);
+        }
 
         // 读取认证配置
         authEnabled = config.getBoolean("auth.enabled", true);
+        authMode = config.getString("auth.mode", "main");
+        authServerAddress = config.getString("auth.auth-server-address", "localhost:25566");
+        mainServerAddress = config.getString("auth.main-server-address", "localhost:25565");
+        sharedDataDir = config.getString("auth.shared-data-dir", "plugins/QZXBotSync/shared");
         authMinPasswordLength = config.getInt("auth.min-password-length", 4);
         authMaxPasswordLength = config.getInt("auth.max-password-length", 32);
         authMaxLoginAttempts = config.getInt("auth.max-login-attempts", 3);
@@ -241,7 +271,8 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
         });
 
         authListener = new AuthListener(authManager, this, napCatWS, qzxTitle, serverName, groupIds, dbManager,
-                () -> { for (long gid : groupIds) groupStats.computeIfAbsent(gid, k -> new long[2])[0]++; });
+                () -> { for (long gid : groupIds) groupStats.computeIfAbsent(gid, k -> new long[2])[0]++; },
+                authServerAddress, sharedDataDir);
         Bukkit.getPluginManager().registerEvents(authListener, this);
 
         getLogger().info("认证系统已启用 (SQLite)");
