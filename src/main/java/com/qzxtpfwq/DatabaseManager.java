@@ -53,6 +53,13 @@ public class DatabaseManager {
                 "  bind_date INTEGER NOT NULL" +
                 ")"
             );
+            stmt.execute(
+                "CREATE TABLE IF NOT EXISTS premium_accounts (" +
+                "  premium_uuid TEXT PRIMARY KEY," +
+                "  offline_uuid TEXT NOT NULL UNIQUE," +
+                "  username TEXT NOT NULL" +
+                ")"
+            );
         }
         logger.info("认证数据库已初始化: " + url);
     }
@@ -288,6 +295,60 @@ public class DatabaseManager {
             ps.executeUpdate();
         } catch (SQLException e) {
             logger.warning("确认绑定失败: " + e.getMessage());
+        }
+    }
+
+    // ══════════ 正版账号 ══════════
+
+    /** 存入正版账号映射（premium_uuid → offline_uuid） */
+    public void linkPremiumAccount(String premiumUuid, String offlineUuid, String username) {
+        String sql = "INSERT OR REPLACE INTO premium_accounts (premium_uuid, offline_uuid, username) VALUES (?, ?, ?)";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, premiumUuid);
+            ps.setString(2, offlineUuid);
+            ps.setString(3, username);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.warning("保存正版账号映射失败: " + e.getMessage());
+        }
+    }
+
+    /** 根据正版 UUID 查离线 UUID */
+    public String getOfflineUUIDByPremium(String premiumUuid) {
+        String sql = "SELECT offline_uuid FROM premium_accounts WHERE premium_uuid = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, premiumUuid);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString("offline_uuid");
+            }
+        } catch (SQLException e) {
+            logger.warning("查询正版映射失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /** 根据离线 UUID 查正版 UUID */
+    public String getPremiumUUIDByOffline(String offlineUuid) {
+        String sql = "SELECT premium_uuid FROM premium_accounts WHERE offline_uuid = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, offlineUuid);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString("premium_uuid");
+            }
+        } catch (SQLException e) {
+            logger.warning("查询正版映射失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /** 删除正版映射 */
+    public void unlinkPremiumAccount(String premiumUuid) {
+        String sql = "DELETE FROM premium_accounts WHERE premium_uuid = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, premiumUuid);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.warning("删除正版映射失败: " + e.getMessage());
         }
     }
 }
