@@ -40,6 +40,22 @@ stats:
 # ==================== 认证系统 ====================
 auth:
   enabled: true
+
+  # 运行模式: main(主服,完整功能) / verify(认证子服,仅验证正版并回传)
+  mode: main
+
+  # 正版验证子服地址 (仅 mode=main 时生效)
+  # 玩家点正版登录后会 transfer 到这个子服做 Mojang 在线验证
+  auth-server-address: "localhost:25566"
+
+  # 主服地址 (仅 mode=verify 时生效)
+  # 认证完成后 transfer 回主服
+  main-server-address: "localhost:25565"
+
+  # 共享数据目录，主服和认证服指向同一路径 (绝对路径)
+  # 用于传递正版验证结果
+  shared-data-dir: "plugins/QZXBotSync/shared"
+
   min-password-length: 4
   max-password-length: 32
   max-login-attempts: 3
