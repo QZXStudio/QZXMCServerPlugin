@@ -341,6 +341,20 @@ public class DatabaseManager {
         return null;
     }
 
+    /** 检查用户名是否有正版映射（独立或合并且） */
+    public boolean hasPremiumMappingByUsername(String username) {
+        String sql = "SELECT 1 FROM premium_accounts WHERE username = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, username);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            logger.warning("查询用户名正版映射失败: " + e.getMessage());
+            return false;
+        }
+    }
+
     /** 删除正版映射 */
     public void unlinkPremiumAccount(String premiumUuid) {
         String sql = "DELETE FROM premium_accounts WHERE premium_uuid = ?";
