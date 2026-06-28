@@ -28,6 +28,7 @@ import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerCommandSendEvent;
+import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -54,7 +55,9 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -126,9 +129,9 @@ public class AuthListener implements Listener {
     private void registerPremiumUuidHook() {
         // 按顺序尝试不同 Paper 版本的事件类路径
         String[] candidates = {
-            "io.papermc.paper.event.player.AsyncPlayerPreLoginEvent",   // Paper 1.21+
-            "com.destroystokyo.paper.event.player.AsyncPlayerPreLoginEvent", // Paper 1.20
-            "org.bukkit.event.player.AsyncPlayerPreLoginEvent"          // 标准 Bukkit
+                "io.papermc.paper.event.player.AsyncPlayerPreLoginEvent",   // Paper 1.21+
+                "com.destroystokyo.paper.event.player.AsyncPlayerPreLoginEvent", // Paper 1.20
+                "org.bukkit.event.player.AsyncPlayerPreLoginEvent"          // 标准 Bukkit
         };
         for (String className : candidates) {
             try {
@@ -227,6 +230,7 @@ public class AuthListener implements Listener {
             authManager.setState(uuid, AuthManager.AuthState.LOGGED_IN);
             authManager.setLoggedIn(uuid, true);
             authManager.saveSession(uuid, ip);
+            applyIdentityTag(player, uuid);
             player.updateCommands();
             doJoinBroadcast(player);
             return;
@@ -973,6 +977,8 @@ public class AuthListener implements Listener {
         authManager.setState(uuid, AuthManager.AuthState.LOGGED_IN);
         authManager.setLoggedIn(uuid, true);
         unfreeze(player);
+        player.getScoreboardTags().remove("premium");
+        player.getScoreboardTags().add("offline");
         player.updateCommands(); // 重发命令列表给客户端（补全恢复）
 
         if (isRegister) {
@@ -1041,7 +1047,18 @@ public class AuthListener implements Listener {
         }
     }
 
+    /** 根据 DB 记录给玩家打 identity tag（offline/premium） */
+    private void applyIdentityTag(Player player, UUID uuid) {
+        player.getScoreboardTags().remove("offline");
+        player.getScoreboardTags().remove("premium");
+        boolean isPremium = dbManager.getPremiumUUIDByOffline(uuid.toString()) != null
+                || "PREMIUM".equals(dbManager.getPasswordHash(uuid));
+        player.getScoreboardTags().add(isPremium ? "premium" : "offline");
+    }
+
     private void broadcastPremiumAuth(Player player, boolean isMerge) {
+        player.getScoreboardTags().remove("offline");
+        player.getScoreboardTags().add("premium");
         String subtitle = isMerge ? "&f欢迎回到 &6" + serverName + " &7（已合并离线数据）"
                 : "&f欢迎回到 &6" + serverName + " &7（独立正版身份）";
         player.showTitle(Title.title(
@@ -1197,6 +1214,60 @@ public class AuthListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.LOW)
+    public void onServerCommand(ServerCommandEvent event) {
+        String message = event.getCommand();
+        String[] parts = message.split(" ");
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = 1; i < parts.length; i++) {
+            String word = parts[i];
+            String baseName = word;
+
+            // 后缀路由
+            String suffix = null;
+            if (word.endsWith("-o") || word.endsWith("_o") || word.endsWith("-online") || word.endsWith("_online")) {
+                suffix = "premium";
+                baseName = word.replaceAll("[-_](o|f|offline|online)$", "");
+            } else if (word.endsWith("-f") || word.endsWith("_f") || word.endsWith("-offline") || word.endsWith("_offline")) {
+                suffix = "offline";
+                baseName = word.replaceAll("[-_](o|f|offline|online)$", "");
+            }
+            if (suffix != null) {
+                parts[i] = "@a[name=" + baseName + ",tag=" + suffix + ",limit=1]";
+                continue;
+            }
+
+            // 双身份检测
+            UUID offlineUuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + baseName).getBytes());
+            boolean hasOffline = dbManager.playerExists(offlineUuid)
+                    && !"PREMIUM".equals(dbManager.getPasswordHash(offlineUuid));
+            boolean hasPremium = dbManager.hasPremiumMappingByUsername(baseName);
+            if (hasOffline && hasPremium) {
+                if (sb.length() == 0) sb.append(ChatColor.translateAlternateColorCodes('&',
+                        "&e同名账号 &f" + baseName + " &e存在双身份:"));
+                else sb.append("\n");
+                sb.append(" ").append(ChatColor.translateAlternateColorCodes('&',
+                        "&7[离线] &f后缀: " + baseName + "-f  &b[正版] &f后缀: " + baseName + "-o"));
+            }
+        }
+
+        if (sb.length() > 0) {
+            sb.append("\n").append(ChatColor.translateAlternateColorCodes('&',
+                    "&7原命令: &f" + message + "\n&7请加后缀区分后重试"));
+            event.setCancelled(true);
+            event.getSender().sendMessage(sb.toString());
+            plugin.getLogger().info("[命令路由-终端] 拦截歧义命令: " + message);
+            return;
+        }
+
+        // 无歧义但有后缀替换 → 重写命令
+        String newCmd = String.join(" ", parts);
+        if (!newCmd.equals(message)) {
+            event.setCommand(newCmd);
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
@@ -1206,6 +1277,197 @@ public class AuthListener implements Listener {
         if (ALLOWED_COMMANDS.contains(cmd)) return;
         event.setCancelled(true);
         player.sendMessage(ChatColor.RED + "请先完成认证后再使用命令！");
+    }
+
+    // ═══════════════════════════════════════════════
+    // 同名双开命令路由：XD-o 路由到离线，XD-f 路由到正版，无后缀弹出选择
+    // ═══════════════════════════════════════════════
+
+    // 命令身份选择 — 多目标逐个选
+    private final Set<UUID> pendingCommandChoice = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Map<UUID, PendingCommandState> pendingCommandStates = new ConcurrentHashMap<>();
+    private final Set<UUID> advancingChoice = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    private static class PendingCommandState {
+        final String originalMessage;
+        final String[] parts;
+        final List<Integer> ambiguousIndices = new ArrayList<>();
+        final Map<Integer, PendingChoice> choices = new LinkedHashMap<>();
+        final Map<Integer, String> resolved = new HashMap<>();
+        int cursor = 0;
+        PendingCommandState(String msg, String[] parts) { this.originalMessage = msg; this.parts = parts; }
+    }
+
+    private static class PendingChoice {
+        final String baseName;
+        final UUID offlineUuid;
+        final Player offlineOnline;
+        final Player premiumOnline;
+        PendingChoice(String n, UUID ou, Player oo, Player po) { baseName=n; offlineUuid=ou; offlineOnline=oo; premiumOnline=po; }
+    }
+
+    @EventHandler(priority = EventPriority.LOW)
+    public void onCommandIdentityRoute(PlayerCommandPreprocessEvent event) {
+        Player sender = event.getPlayer();
+        if (!authManager.isLoggedIn(sender.getUniqueId())) return;
+        if (pendingCommandChoice.contains(sender.getUniqueId())) return;
+
+        String message = event.getMessage();
+        String[] parts = message.split(" ");
+        boolean modified = false;
+        PendingCommandState state = null;
+
+        for (int i = 1; i < parts.length; i++) {
+            String word = parts[i];
+            // ── 后缀路由 ──
+            String suffix = null;
+            if (word.endsWith("-o") || word.endsWith("_o") || word.endsWith("-online") || word.endsWith("_online")) {
+                suffix = "premium";
+            } else if (word.endsWith("-f") || word.endsWith("_f") || word.endsWith("-offline") || word.endsWith("_offline")) {
+                suffix = "offline";
+            }
+            if (suffix != null) {
+                String baseName = word.replaceAll("[-_](o|f|offline|online)$", "");
+                parts[i] = "@a[name=" + baseName + ",tag=" + suffix + ",limit=1]";
+                modified = true;
+                continue;
+            }
+            // ── 双身份检测 ──
+            String baseName = word;
+            UUID offlineUuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + baseName).getBytes());
+            boolean hasOffline = dbManager.playerExists(offlineUuid)
+                    && !"PREMIUM".equals(dbManager.getPasswordHash(offlineUuid));
+            boolean hasPremium = dbManager.hasPremiumMappingByUsername(baseName);
+            if (!hasOffline || !hasPremium) continue;
+
+            Player offlineOnline = null, premiumOnline = null;
+            for (Player p : Bukkit.getOnlinePlayers()) {
+                if (!p.getName().equals(baseName)) continue;
+                if (p.getScoreboardTags().contains("premium")) premiumOnline = p;
+                else if (p.getScoreboardTags().contains("offline")) offlineOnline = p;
+                else { if (p.getUniqueId().equals(offlineUuid)) offlineOnline = p; else premiumOnline = p; }
+            }
+
+            if (state == null) state = new PendingCommandState(message, parts);
+            state.ambiguousIndices.add(i);
+            state.choices.put(i, new PendingChoice(baseName, offlineUuid, offlineOnline, premiumOnline));
+            plugin.getLogger().info("[命令路由] 歧义#" + state.ambiguousIndices.size()
+                    + ": " + baseName + " 离线=" + (offlineOnline != null ? "在线" : "不在线")
+                    + " 正版=" + (premiumOnline != null ? "在线" : "不在线"));
+        }
+
+        // 无歧义 → 放行（含纯后缀替换）
+        if (state == null) {
+            if (modified) event.setMessage(String.join(" ", parts));
+            return;
+        }
+
+        // 有歧义 → 取消命令，开始逐个选
+        event.setCancelled(true);
+        pendingCommandChoice.add(sender.getUniqueId());
+        pendingCommandStates.put(sender.getUniqueId(), state);
+        showNextCommandChoice(sender);
+    }
+
+    /** 弹出当前游标指向的歧义名选择 GUI */
+    private void showNextCommandChoice(Player player) {
+        PendingCommandState state = pendingCommandStates.get(player.getUniqueId());
+        if (state == null) return;
+        if (state.cursor >= state.ambiguousIndices.size()) {
+            // 全部选完 → 构建并执行最终命令，去掉 /
+            String[] finalParts = state.parts.clone();
+            for (Map.Entry<Integer, String> e : state.resolved.entrySet()) finalParts[e.getKey()] = e.getValue();
+            String finalCmd = String.join(" ", finalParts).substring(1);
+            pendingCommandChoice.remove(player.getUniqueId());
+            pendingCommandStates.remove(player.getUniqueId());
+            Bukkit.dispatchCommand(player, finalCmd);
+            return;
+        }
+        int idx = state.ambiguousIndices.get(state.cursor);
+        PendingChoice c = state.choices.get(idx);
+        openIdentityChoiceGUI(player, c.baseName, c.offlineOnline, c.premiumOnline, c.offlineUuid, idx);
+    }
+
+    private void openIdentityChoiceGUI(Player sender, String baseName, Player offlineOnline, Player premiumOnline,
+                                        UUID offlineUuid, int argIndex) {
+        PendingCommandState state = pendingCommandStates.get(sender.getUniqueId());
+        if (state == null) return;
+        int remaining = state.ambiguousIndices.size() - state.cursor;
+        Inventory inv = Bukkit.createInventory(null, 9,
+                ChatColor.translateAlternateColorCodes('&', "&6[" + (state.cursor + 1) + "/"
+                        + state.ambiguousIndices.size() + "] &f" + baseName));
+
+        String offlineStatus = offlineOnline != null ? "§a● 在线" : "§c○ 不在线";
+        inv.setItem(2, makeItem(Material.IRON_SWORD, "§7" + baseName + " §f[§7离线账号§f]",
+                "§7离线登录 · 密码验证",
+                "§7UUID: " + offlineUuid.toString().substring(0, 8) + "…",
+                offlineStatus));
+
+        UUID premiumUuid = null;
+        if (premiumOnline != null) premiumUuid = premiumOnline.getUniqueId();
+        else {
+            String pid = dbManager.getPremiumUUIDByOffline(offlineUuid.toString());
+            if (pid != null) premiumUuid = UUID.fromString(pid);
+        }
+        String premiumStatus = premiumOnline != null ? "§a● 在线" : "§c○ 不在线";
+        inv.setItem(6, makeItem(Material.DIAMOND_SWORD, "§b" + baseName + " §f[§b正版账号§f]",
+                "§bMojang 验证 · 独立身份",
+                "§7UUID: " + (premiumUuid != null ? premiumUuid.toString().substring(0, 8) : "?") + "…",
+                premiumStatus,
+                "§8剩余待选: " + (remaining - 1) + " 个"));
+
+        sender.openInventory(inv);
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onIdentityChoiceClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        UUID uuid = player.getUniqueId();
+        if (!pendingCommandChoice.contains(uuid)) return;
+
+        String title = getViewTitle(event.getView());
+        if (title.isEmpty() || (!title.contains(baseNameFromTitle(title)) && !title.contains("选择"))) return;
+
+        event.setCancelled(true);
+        int slot = event.getRawSlot();
+        if (slot != 2 && slot != 6) return;
+
+        PendingCommandState state = pendingCommandStates.get(uuid);
+        if (state == null || state.cursor >= state.ambiguousIndices.size()) return;
+
+        int idx = state.ambiguousIndices.get(state.cursor);
+        PendingChoice c = state.choices.get(idx);
+        boolean chooseOffline = (slot == 2);
+
+        String tag = chooseOffline ? "offline" : "premium";
+        String selector = "@a[name=" + c.baseName + ",tag=" + tag + ",limit=1]";
+        state.resolved.put(idx, selector);
+
+        advancingChoice.add(uuid);
+        player.closeInventory();
+        state.cursor++;
+        showNextCommandChoice(player);
+        advancingChoice.remove(uuid);
+    }
+
+    private String baseNameFromTitle(String title) {
+        int i = title.lastIndexOf(' ');
+        return i >= 0 ? title.substring(i + 1) : title;
+    }
+
+    /** ESC 关闭选择 GUI 时清理状态，防止下次命令跳过选择直接放行 */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onIdentityChoiceClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) return;
+        UUID uuid = player.getUniqueId();
+        if (!pendingCommandChoice.contains(uuid)) return;
+        if (advancingChoice.contains(uuid)) return; // 切到下一个选择，不是关闭
+        String title = getViewTitle(event.getView());
+        if (title.contains("/") && title.contains("]")) {
+            pendingCommandChoice.remove(uuid);
+            pendingCommandStates.remove(uuid);
+            plugin.getLogger().info("[命令路由] GUI 被关闭，已清理待选状态");
+        }
     }
 
     // ═══════════════════════════════════════════════
