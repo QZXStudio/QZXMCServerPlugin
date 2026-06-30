@@ -7,6 +7,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -353,6 +355,44 @@ public class DatabaseManager {
             logger.warning("查询用户名正版映射失败: " + e.getMessage());
             return false;
         }
+    }
+
+    /** 获取所有已注册用户名列表（用于 tab 补全） */
+    public List<String> getAllUsernames() {
+        List<String> names = new ArrayList<>();
+        String sql = "SELECT username FROM auth_players";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) names.add(rs.getString("username"));
+        } catch (SQLException e) {
+            logger.warning("查询所有用户名失败: " + e.getMessage());
+        }
+        return names;
+    }
+
+    /** 删除玩家认证记录（重置密码） */
+    public void deletePlayer(UUID uuid) {
+        String sql = "DELETE FROM auth_players WHERE uuid = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, uuid.toString());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.warning("删除玩家记录失败: " + e.getMessage());
+        }
+    }
+
+    /** 根据用户名查 UUID */
+    public String getUUIDByUsername(String username) {
+        String sql = "SELECT uuid FROM auth_players WHERE username = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, username);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString("uuid");
+            }
+        } catch (SQLException e) {
+            logger.warning("根据用户名查询UUID失败: " + e.getMessage());
+        }
+        return null;
     }
 
     /** 删除正版映射 */
