@@ -1,6 +1,7 @@
 package com.qzxtpfwq;
 
 import io.papermc.paper.advancement.AdvancementDisplay;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
@@ -34,6 +35,7 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -937,6 +939,10 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
                 handleBindQQ(sender, args);
                 break;
 
+            case "resetpwd":
+                handleResetPwd(sender, args);
+                break;
+
             default:
                 sendHelp(sender);
                 break;
@@ -992,6 +998,34 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
         player.sendMessage("");
     }
 
+    private void handleResetPwd(CommandSender sender, String[] args) {
+        if (dbManager == null || !authEnabled) {
+            sender.sendMessage(ChatColor.RED + "认证系统未启用");
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.YELLOW + "用法: /qzxbot resetpwd <玩家名>");
+            sender.sendMessage(ChatColor.GRAY + "重置离线玩家的密码，玩家需重新注册");
+            return;
+        }
+        String targetName = args[1];
+        String uuidStr = dbManager.getUUIDByUsername(targetName);
+        if (uuidStr == null) {
+            sender.sendMessage(ChatColor.RED + "未找到玩家: " + targetName);
+            return;
+        }
+        UUID uuid = UUID.fromString(uuidStr);
+        dbManager.deletePlayer(uuid);
+        dbManager.unlinkPremiumAccount(uuidStr); // 同时清正版映射
+        authManager.logout(uuid);
+
+        Player online = Bukkit.getPlayer(uuid);
+        if (online != null) {
+            online.kick(Component.text("§e你的密码已被管理员重置，请重新进入服务器注册"));
+        }
+        sender.sendMessage(ChatColor.GREEN + "已重置密码: " + targetName);
+    }
+
     private void saveGroupConfig() {
         getConfig().set("qq-groups", groupIds);
         saveConfig();
@@ -1015,6 +1049,7 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
         sender.sendMessage(ChatColor.GRAY + "/qzxbot status - 查看连接状态");
         sender.sendMessage(ChatColor.GRAY + "/qzxbot reconnect - 强制重新连接");
         sender.sendMessage(ChatColor.GRAY + "/qzxbot bindqq <QQ号> - 绑定QQ账号");
+        sender.sendMessage(ChatColor.GRAY + "/qzxbot resetpwd <玩家名> - 重置离线玩家密码 (OP)");
         sender.sendMessage(ChatColor.GRAY + "/qzxbot help - 显示此帮助");
     }
 
@@ -1035,8 +1070,11 @@ public final class QZXBotSync extends JavaPlugin implements Listener {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return filterStartsWith(Arrays.asList("ws", "group", "sync", "reload", "status", "reconnect", "bindqq", "help"), args[0]);
+            return filterStartsWith(Arrays.asList("ws", "group", "sync", "reload", "status", "reconnect", "bindqq", "resetpwd", "help"), args[0]);
         } else if (args.length == 2) {
+            if (args[0].equalsIgnoreCase("resetpwd") && dbManager != null) {
+                return filterStartsWith(dbManager.getAllUsernames(), args[1]);
+            }
             if (args[0].equalsIgnoreCase("group")) {
                 return filterStartsWith(Arrays.asList("add", "remove", "list"), args[1]);
             } else if (args[0].equalsIgnoreCase("sync")) {
